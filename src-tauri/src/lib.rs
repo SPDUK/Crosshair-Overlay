@@ -18,6 +18,19 @@ struct ConfigPayload {
     config: CrosshairConfig,
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+struct CrosshairPreset {
+    id: String,
+    name: String,
+    config: CrosshairConfig,
+    created_at: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct FavoritesData {
+    presets: Vec<CrosshairPreset>,
+}
+
 #[tauri::command]
 async fn init_overlay() -> Result<String, String> {
     #[cfg(windows)]
@@ -87,6 +100,95 @@ async fn save_config(config: CrosshairConfig) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     
     std::fs::write(config_path, config_str)
+        .map_err(|e| e.to_string())?;
+    
+    Ok(())
+}
+
+#[tauri::command]
+async fn save_preset(preset: CrosshairPreset) -> Result<(), String> {
+    let config_dir = dirs::config_dir()
+        .ok_or("Failed to get config directory")?
+        .join("crosshair-overlay");
+    
+    std::fs::create_dir_all(&config_dir)
+        .map_err(|e| e.to_string())?;
+    
+    let presets_path = config_dir.join("presets.json");
+    
+    // Load existing presets
+    let mut favorites_data = if presets_path.exists() {
+        let presets_str = std::fs::read_to_string(&presets_path)
+            .map_err(|e| e.to_string())?;
+        serde_json::from_str::<FavoritesData>(&presets_str)
+            .unwrap_or(FavoritesData { presets: Vec::new() })
+    } else {
+        FavoritesData { presets: Vec::new() }
+    };
+    
+    // Remove existing preset with same ID if it exists
+    favorites_data.presets.retain(|p| p.id != preset.id);
+    
+    // Add new preset
+    favorites_data.presets.push(preset);
+    
+    // Save back to file
+    let presets_str = serde_json::to_string_pretty(&favorites_data)
+        .map_err(|e| e.to_string())?;
+    
+    std::fs::write(presets_path, presets_str)
+        .map_err(|e| e.to_string())?;
+    
+    Ok(())
+}
+
+#[tauri::command]
+async fn load_presets() -> Result<Vec<CrosshairPreset>, String> {
+    let config_dir = dirs::config_dir()
+        .ok_or("Failed to get config directory")?
+        .join("crosshair-overlay");
+    
+    let presets_path = config_dir.join("presets.json");
+    
+    if !presets_path.exists() {
+        return Ok(Vec::new());
+    }
+    
+    let presets_str = std::fs::read_to_string(presets_path)
+        .map_err(|e| e.to_string())?;
+    
+    let favorites_data: FavoritesData = serde_json::from_str(&presets_str)
+        .unwrap_or(FavoritesData { presets: Vec::new() });
+    
+    Ok(favorites_data.presets)
+}
+
+#[tauri::command]
+async fn delete_preset(id: String) -> Result<(), String> {
+    let config_dir = dirs::config_dir()
+        .ok_or("Failed to get config directory")?
+        .join("crosshair-overlay");
+    
+    let presets_path = config_dir.join("presets.json");
+    
+    if !presets_path.exists() {
+        return Ok(());
+    }
+    
+    let presets_str = std::fs::read_to_string(&presets_path)
+        .map_err(|e| e.to_string())?;
+    
+    let mut favorites_data: FavoritesData = serde_json::from_str(&presets_str)
+        .unwrap_or(FavoritesData { presets: Vec::new() });
+    
+    // Remove preset with matching ID
+    favorites_data.presets.retain(|p| p.id != id);
+    
+    // Save back to file
+    let presets_str = serde_json::to_string_pretty(&favorites_data)
+        .map_err(|e| e.to_string())?;
+    
+    std::fs::write(presets_path, presets_str)
         .map_err(|e| e.to_string())?;
     
     Ok(())
@@ -198,6 +300,9 @@ pub fn run() {
             get_crosshair_config,
             save_config,
             load_config,
+            save_preset,
+            load_presets,
+            delete_preset,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
